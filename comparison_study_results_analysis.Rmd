@@ -1,0 +1,880 @@
+---
+title: "dsc_analysis_for_thesis"
+author: "Annie Xie"
+date: "2026-05-30"
+output: pdf_document
+---
+
+# Packages and Functions
+```{r}
+library(ggplot2)
+library(pheatmap)
+library(dplyr)
+library(tidyr)
+```
+
+```{r}
+plot_loadings <- function(L_est, Pop, legendYN = TRUE, scales_option = "fixed"){
+  # options for scales_option are "fixed" and "free_y"
+  n <- nrow(L_est)
+  k <- ncol(L_est)
+  Idx <- rep(c(1:n), k)
+  Loading <- c(L_est)
+  Factor <- paste0('k=',c(sapply(c(1:k), function(x, n){rep(x, n)}, n = n)))
+  tib <- data.frame(Idx, Loading, Factor, Pop)
+  plt <- ggplot(tib, aes(x = Idx, y = Loading, col = Pop)) +
+    geom_point(show.legend = legendYN) +
+    geom_hline(yintercept = 0, linetype = "dashed") +
+    facet_grid(cols = vars(Factor), scales = scales_option) +
+    theme(axis.title.x = element_blank(),
+          axis.title.y = element_blank(),
+          axis.ticks.x = element_blank(),
+          axis.ticks.y = element_blank(),
+          axis.text.x = element_blank(),
+          axis.text.y = element_blank(),
+          panel.spacing = unit(1, "lines"))
+  plot(plt)
+}
+
+plot_heatmap <- function(L, title = "", colors_range = c("gray96", "red"), brks = NULL){
+  ### define the color map
+  cols <- colorRampPalette(colors_range)(49)
+  if (is.null(brks) == TRUE){
+    brks <- seq(min(L), max(L), length=50)
+  }
+  
+  plt <- pheatmap(L, show_rownames = FALSE, show_colnames = FALSE, cluster_rows = FALSE, cluster_cols = FALSE, color = cols, breaks = brks, main = title)
+  return(plt)
+}
+```
+
+```{r}
+library(dplyr)
+```
+
+# Reading in the Results
+```{r}
+dscout <- readRDS("dsc_results.rds")
+dscout2 <- readRDS("dsc_diff_n_p_results.rds")
+```
+
+```{r}
+colnames(dscout)
+```
+
+# Dataframe Cleaning
+## n less than p
+```{r}
+# change NA to no split in datasplit column
+dscout$data_split[is.na(dscout$data_split) == TRUE] <- 'None'
+```
+
+```{r}
+dscout$analyze_col_split_only[dscout$analyze_col_split_only == 'symebcovmf'] <- 'ebcd_direct'
+```
+
+```{r}
+# create one column for analysis method
+dscout <- dscout %>% mutate(analyze = coalesce(analyze_col_split_only, analyze_col_and_row_split))
+
+# change NA to PCA in analyze column
+dscout$analyze[is.na(dscout$analyze) == TRUE] <- 'PCA'
+```
+
+```{r}
+dscout$init[is.na(dscout$init) == TRUE & dscout$analyze != 'PCA'] <- 'true_init'
+```
+
+```{r}
+# create one column for prior
+dscout <- dscout %>% mutate(prior = coalesce(analyze_col_and_row_split.ebnm_fn, analyze_col_split_only.ebnm_fn))
+
+# reformat the priors to only contain the prior name
+dscout$prior <- sub("^.*?_", "", dscout$prior)
+```
+
+```{r}
+dscout <- dscout |> mutate(simulate_setting = paste(simulate, coalesce(simulate.pop_sizes, as.character(simulate.pi0)), sep = '-'))
+
+dscout <- dscout |> mutate(simulate_setting = case_match(simulate_setting,
+    "baltree_4pop-rep(40, 4)" ~ 'Balanced Tree - Balanced Groups',
+    "baltree_4pop-c(20,50,30,60)" ~ 'Balanced Tree - Unbalanced Groups',
+    "group_overlap-0.1" ~ 'Sparse Overlap - 0.1',
+    "group_overlap-0.3" ~ 'Sparse Overlap - 0.3',
+    "group_nonoverlap-rep(40, 4)" ~ 'Balanced Nonoverlap',
+    "group_nonoverlap-c(20,50,30,60)" ~ 'Unbalanced Nonoverlap',
+    "unbaltree_4pop-rep(40, 4)" ~ 'Unbalanced Tree',
+    .default = NA  # Optional: handles unexpected values
+  ))
+
+dscout$simulate_setting <- factor(dscout$simulate_setting, levels = c('Unbalanced Nonoverlap','Balanced Nonoverlap', 'Sparse Overlap - 0.1', 'Sparse Overlap - 0.3', 'Balanced Tree - Balanced Groups','Balanced Tree - Unbalanced Groups','Unbalanced Tree'))
+```
+
+```{r}
+dscout <- dscout |> mutate(init = case_match(init,
+    "pt_laplace_split" ~ 'Point-Laplace EBcovMF with splitting',
+    "codesymnmf_init" ~ 'CoDesymNMF Initialization',
+    "ebmfcov_greedy" ~ 'EBcovMF Greedy',
+    "ebmfcov_greedy_refit" ~ 'EBcovMF Greedy with refitting',
+    "true_init" ~ 'True Init',
+    .default = NA  # Optional: handles unexpected values
+  ))
+```
+
+```{r}
+# I also want to make new columns which capture the analysis method information
+dscout <- dscout |> mutate(method = paste0(analyze, ifelse(is.na(prior), '', 
+                                                           paste0('-', ifelse(prior == 'point_exponential', 'pt-exp', 'gb')))))
+```
+
+```{r}
+# change NA to no split in datasplit column
+dscout$score[is.na(dscout$score) == TRUE] <- 'obj_func_val'
+```
+
+```{r}
+dscout <- dscout |> mutate(metric_value = coalesce(score.result, score_no_split.result))
+```
+
+## n greater than p
+
+```{r}
+# change NA to no split in datasplit column
+dscout2$data_split[is.na(dscout2$data_split) == TRUE] <- 'None'
+```
+
+```{r}
+dscout2$analyze_col_split_only[dscout2$analyze_col_split_only == 'symebcovmf'] <- 'ebcd_direct'
+```
+
+```{r}
+# create one column for analysis method
+dscout2 <- dscout2 %>% mutate(analyze = coalesce(analyze_col_split_only, analyze_col_and_row_split))
+
+# change NA to PCA in analyze column
+dscout2$analyze[is.na(dscout2$analyze) == TRUE] <- 'PCA'
+```
+
+```{r}
+dscout2$init[is.na(dscout2$init) == TRUE & dscout2$analyze != 'PCA'] <- 'true_init'
+```
+
+```{r}
+# create one column for prior
+dscout2 <- dscout2 %>% mutate(prior = coalesce(analyze_col_and_row_split.ebnm_fn, analyze_col_split_only.ebnm_fn))
+
+# reformat the priors to only contain the prior name
+dscout2$prior <- sub("^.*?_", "", dscout2$prior)
+```
+
+```{r}
+dscout2 <- dscout2 |> mutate(simulate_setting = paste(simulate, coalesce(simulate.pop_sizes, as.character(simulate.pi0)), sep = '-'))
+
+dscout2 <- dscout2 |> mutate(simulate_setting = case_match(simulate_setting,
+    "baltree_4pop-rep(400, 4)" ~ 'Balanced Tree - Balanced Groups',
+    "baltree_4pop-c(200,500,300,600)" ~ 'Balanced Tree - Unbalanced Groups',
+    "group_overlap-0.1" ~ 'Sparse Overlap - 0.1',
+    "group_overlap-0.3" ~ 'Sparse Overlap - 0.3',
+    "group_nonoverlap-rep(400, 4)" ~ 'Balanced Nonoverlap',
+    "group_nonoverlap-c(200,500,300,600)" ~ 'Unbalanced Nonoverlap',
+    "unbaltree_4pop-rep(400, 4)" ~ 'Unbalanced Tree',
+    .default = NA  # Optional: handles unexpected values
+  ))
+
+dscout2$simulate_setting <- factor(dscout2$simulate_setting, levels = c('Unbalanced Nonoverlap','Balanced Nonoverlap', 'Sparse Overlap - 0.1', 'Sparse Overlap - 0.3', 'Balanced Tree - Balanced Groups','Balanced Tree - Unbalanced Groups','Unbalanced Tree'))
+```
+
+```{r}
+dscout2 <- dscout2 |> mutate(init = case_match(init,
+    "pt_laplace_split" ~ 'Point-Laplace EBcovMF with splitting',
+    "codesymnmf_init" ~ 'CoDesymNMF Initialization',
+    "ebmfcov_greedy" ~ 'EBcovMF Greedy',
+    "ebmfcov_greedy_refit" ~ 'EBcovMF Greedy with refitting',
+    "true_init" ~ 'True Init',
+    .default = NA  # Optional: handles unexpected values
+  ))
+```
+
+```{r}
+# I also want to make new columns which capture the analysis method information
+dscout2 <- dscout2 |> mutate(method = paste0(analyze, ifelse(is.na(prior), '', 
+                                                           paste0('-', ifelse(prior == 'point_exponential', 'pt-exp', 'gb')))))
+```
+
+```{r}
+# change NA to no split in datasplit column
+dscout2$score[is.na(dscout2$score) == TRUE] <- 'obj_func_val'
+```
+
+```{r}
+dscout2 <- dscout2 |> mutate(metric_value = coalesce(score.result, score_no_split.result))
+```
+
+# Stability Selection
+
+## n less than p
+```{r}
+# row-split vs column split for n < p
+
+# let's filter the data to get rid of anything we don't need
+dscout_stability_selection_plot1 <- dscout |> 
+  filter(data_split != 'None', score %in% c('prop_est_high_cos_sim','prop_true_high_cos_sim')) |>
+  mutate(data_split = case_match(data_split,
+    "rand_split_by_col" ~ 'column',
+    "rand_split_by_row" ~ 'row'
+  ))
+
+# I'll also make some choices on what versions of the methods we will consider
+dscout_stability_selection_plot1 <- dscout_stability_selection_plot1 |>
+  filter(is.na(row_split_estimate_L) == TRUE | row_split_estimate_L == 'backfit_L') |>
+  filter(score.sim_threshold == 0.90) |>
+  filter(stability_selection.threshold == 0.8) |>
+  filter(prior == 'point_exponential') |>
+  filter(analyze %in% c('simplified_gbcd','ebcd')) |>
+  select(simulate_setting, data_split, init, analyze, prior, method, score, score.result)
+```
+
+```{r}
+dscout_stability_selection_aggregate_values_plot1 <- dscout_stability_selection_plot1 |>
+  group_by(simulate_setting, init, data_split, method, score) |>
+  summarise(mean_score_result = mean(score.result))
+
+stability_selection_plot1_df <- dscout_stability_selection_aggregate_values_plot1 %>%
+  pivot_wider(
+    names_from  = score,   # column containing the names: e.g. "metric_1", "metric_2"
+    values_from = mean_score_result   # column containing the numerical scores
+  )
+```
+
+```{r}
+p <- ggplot(stability_selection_plot1_df, aes(x = prop_est_high_cos_sim, y = prop_true_high_cos_sim, color = method, shape = data_split)) +
+  # Points with stroke thickness for crisp open circle borders
+  geom_point(size = 2.4, stroke = 1) +
+  # 7 rows (setting) by 4 columns (init)
+  facet_grid(
+    rows = vars(simulate_setting),
+    cols = vars(init),
+    labeller = labeller(
+    simulate_setting = label_wrap_gen(width = 15))
+  ) +
+  # Explicitly map versions to filled (16) and open (1) circles
+  scale_shape_manual(
+    values = c("column" = 16, "row" = 1)
+  ) +
+  scale_color_brewer(palette = "Set1") +
+  # Axis limits [0, 1]
+  scale_x_continuous(
+    limits = c(0, 1),
+    breaks = c(0, 0.5, 1),
+    expand = expansion(mult = 0.05)
+  ) +
+  scale_y_continuous(
+    limits = c(0, 1),
+    breaks = c(0, 0.5, 1),
+    expand = expansion(mult = 0.05)
+  ) +
+  labs(
+    title = "Row-split vs Column-split Stability Selection Across Different Settings (n < p)",
+    x = "Precision",
+    y = "Sensitivity",
+    color = "Method",
+    shape = "Split Type"
+  ) +
+  theme_bw(base_size = 11) +
+  theme(
+    strip.background = element_rect(fill = "grey93", color = "grey60"),
+    strip.text = element_text(face = "bold", size = 9),
+    panel.spacing = unit(0.4, "lines"),
+    panel.grid.minor = element_blank(),
+    legend.position = "bottom",
+    legend.box = "horizontal",
+    plot.title = element_text(face = "bold", hjust = 0.5)
+  )
+
+print(p)
+```
+
+## n greater than p
+```{r}
+# let's filter the data to get rid of anything we don't need
+dscout_stability_selection_plot2 <- dscout2 |> 
+  filter(data_split != 'None', score %in% c('prop_est_high_cos_sim','prop_true_high_cos_sim')) |>
+  mutate(data_split = case_match(data_split,
+    "rand_split_by_col" ~ 'column',
+    "rand_split_by_row" ~ 'row'
+  ))
+
+# I'll also make some choices on what versions of the methods we will consider
+dscout_stability_selection_plot2 <- dscout_stability_selection_plot2 |>
+  filter(is.na(row_split_estimate_L) == TRUE | row_split_estimate_L == 'backfit_L') |>
+  filter(score.sim_threshold == 0.90) |>
+  filter(stability_selection.threshold == 0.8) |>
+  filter(prior == 'point_exponential') |>
+  filter(analyze %in% c('simplified_gbcd','ebcd')) |>
+  select(simulate_setting, data_split, init, analyze, prior, method, score, score.result) 
+```
+
+```{r}
+dscout_stability_selection_aggregate_values_plot2 <- dscout_stability_selection_plot2 |>
+  group_by(simulate_setting, init, data_split, method, score) |>
+  summarise(mean_score_result = mean(score.result))
+
+stability_selection_plot2_df <- dscout_stability_selection_aggregate_values_plot2 %>%
+  pivot_wider(
+    names_from  = score,   # column containing the names: e.g. "metric_1", "metric_2"
+    values_from = mean_score_result   # column containing the numerical scores
+  )
+```
+
+```{r}
+p2 <- ggplot(stability_selection_plot2_df, aes(x = prop_est_high_cos_sim, y = prop_true_high_cos_sim, color = method, shape = data_split)) +
+  # Points with stroke thickness for crisp open circle borders
+  geom_point(size = 2.4, stroke = 1) +
+  # 7 rows (setting) by 4 columns (init)
+  facet_grid(
+    rows = vars(simulate_setting),
+    cols = vars(init),
+    labeller = labeller(
+    simulate_setting = label_wrap_gen(width = 15))
+  ) +
+  # Explicitly map versions to filled (16) and open (1) circles
+  scale_shape_manual(
+    values = c("column" = 16, "row" = 1)
+  ) +
+  scale_color_brewer(palette = "Set1") +
+  # Axis limits [0, 1]
+  scale_x_continuous(
+    limits = c(0, 1),
+    breaks = c(0, 0.5, 1),
+    expand = expansion(mult = 0.05)
+  ) +
+  scale_y_continuous(
+    limits = c(0, 1),
+    breaks = c(0, 0.5, 1),
+    expand = expansion(mult = 0.05)
+  ) +
+  labs(
+    title = "Row-split vs Column-split Stability Selection Across Different Settings (n > p)",
+    x = "Precision",
+    y = "Sensitivity",
+    color = "Method",
+    shape = "Split Type"
+  ) +
+  theme_bw(base_size = 11) +
+  theme(
+    strip.background = element_rect(fill = "grey93", color = "grey60"),
+    strip.text = element_text(face = "bold", size = 9),
+    panel.spacing = unit(0.4, "lines"),
+    panel.grid.minor = element_blank(),
+    legend.position = "bottom",
+    legend.box = "horizontal",
+    plot.title = element_text(face = "bold", hjust = 0.5)
+  )
+
+print(p2)
+```
+
+## stability selection vs no stability selection
+```{r}
+# let's filter the data to get rid of anything we don't need
+dscout_stability_selection_plot3 <- dscout |> 
+  filter(data_split != 'rand_split_by_row', score %in% c('prop_est_high_cos_sim','prop_true_high_cos_sim'), init != 'True Init', analyze != 'PCA') |>
+  mutate(data_split = case_match(data_split,
+    "rand_split_by_col" ~ 'column',
+    "None" ~ 'no split'
+  ))
+
+# I'll also make some choices on what versions of the methods we will consider
+dscout_stability_selection_plot3 <- dscout_stability_selection_plot3 |>
+  filter(score.sim_threshold == 0.90) |>
+  filter(stability_selection.threshold == 0.8 | is.na(stability_selection.threshold) == TRUE) |>
+  filter(prior == 'point_exponential' | is.na(prior) == TRUE) |>
+  select(simulate_setting, data_split, init, analyze, prior, method, score, score.result) 
+```
+
+```{r}
+dscout_stability_selection_aggregate_values_plot3 <- dscout_stability_selection_plot3 |>
+  group_by(simulate_setting, init, data_split, method, score) |>
+  summarise(mean_score_result = mean(score.result))
+
+stability_selection_plot3_df <- dscout_stability_selection_aggregate_values_plot3 %>%
+  pivot_wider(
+    names_from  = score,   # column containing the names: e.g. "metric_1", "metric_2"
+    values_from = mean_score_result   # column containing the numerical scores
+  )
+```
+
+```{r}
+p3 <- ggplot(stability_selection_plot3_df, aes(x = prop_est_high_cos_sim, y = prop_true_high_cos_sim, color = method, shape = data_split)) +
+  # Points with stroke thickness for crisp open circle borders
+  geom_point(size = 2.4, stroke = 1) +
+  # 7 rows (setting) by 4 columns (init)
+  facet_grid(
+    rows = vars(simulate_setting),
+    cols = vars(init),
+    labeller = labeller(
+    simulate_setting = label_wrap_gen(width = 15))
+  ) +
+  # Explicitly map versions to filled (16) and open (1) circles
+  scale_shape_manual(
+    values = c("column" = 16, "no split" = 1),
+    breaks = c("column", "no split"),
+    guide = guide_legend(order = 2)
+  ) +
+  scale_color_brewer(
+    palette = "Set1",
+    guide = guide_legend(order = 1)) +
+  # Axis limits [0, 1]
+  scale_x_continuous(
+    limits = c(0, 1),
+    breaks = c(0, 0.5, 1),
+    expand = expansion(mult = 0.05)
+  ) +
+  scale_y_continuous(
+    limits = c(0, 1),
+    breaks = c(0, 0.5, 1),
+    expand = expansion(mult = 0.05)
+  ) +
+  labs(
+    title = "Stability Selection vs. No Stability Across Different Settings",
+    x = "Precision",
+    y = "Sensitivity",
+    color = "Method",
+    shape = "Split Type"
+  ) +
+  theme_bw(base_size = 11) +
+  theme(
+    strip.background = element_rect(fill = "grey93", color = "grey60"),
+    strip.text = element_text(face = "bold", size = 9),
+    panel.spacing = unit(0.4, "lines"),
+    panel.grid.minor = element_blank(),
+    legend.position = "bottom",
+    legend.box = "horizontal",
+    plot.title = element_text(face = "bold", hjust = 0.5)
+  )
+
+print(p3)
+```
+
+### Change in sensitivity vs change in specificity
+
+```{r}
+stability_selection_plot3_df$data_split[stability_selection_plot3_df$data_split == 'no split'] <- 'no_split'
+
+stability_selection_diff_plot3_df <- stability_selection_plot3_df |>
+  pivot_wider(
+    names_from  = data_split,   # column containing the names: e.g. "metric_1", "metric_2"
+    values_from = c(prop_est_high_cos_sim, prop_true_high_cos_sim)   # column containing the numerical scores
+  ) |>
+  mutate(diff_prop_est_high_cos_sim = prop_est_high_cos_sim_column - prop_est_high_cos_sim_no_split,
+         diff_prop_true_high_cos_sim = prop_true_high_cos_sim_column - prop_true_high_cos_sim_no_split)
+```
+
+```{r}
+p4 <- ggplot(stability_selection_diff_plot3_df, aes(x = diff_prop_est_high_cos_sim, y = diff_prop_true_high_cos_sim, color = method)) +
+  # Points with stroke thickness for crisp open circle borders
+  geom_point(size = 2.4, stroke = 1) +
+  # 7 rows (setting) by 4 columns (init)
+  facet_grid(
+    rows = vars(simulate_setting),
+    cols = vars(init),
+    labeller = labeller(
+    simulate_setting = label_wrap_gen(width = 15))
+  ) +
+  scale_color_brewer(
+    palette = "Set1",
+    guide = guide_legend(order = 1)) +
+  # Axis limits [0, 1]
+  scale_x_continuous(
+    limits = c(-1, 1),
+    breaks = c(-1, 0, 1),
+    expand = expansion(mult = 0.05)
+  ) +
+  scale_y_continuous(
+    limits = c(-1, 1),
+    breaks = c(-1, 0, 1),
+    expand = expansion(mult = 0.05)
+  ) +
+  labs(
+    title = "Change in Metrics for Stability Selection vs. No Stability Selection",
+    x = "Change in Precision",
+    y = "Change in Sensitivity",
+    color = "Method"
+  ) +
+  theme_bw(base_size = 11) +
+  theme(
+    strip.background = element_rect(fill = "grey93", color = "grey60"),
+    strip.text = element_text(face = "bold", size = 9),
+    panel.spacing = unit(0.4, "lines"),
+    panel.grid.minor = element_blank(),
+    legend.position = "bottom",
+    legend.box = "horizontal",
+    plot.title = element_text(face = "bold", hjust = 0.5)
+  )
+
+print(p4)
+```
+
+# Unbalanced Nonoverlapping
+
+```{r}
+dscout_unbal_nonoverlap_results <- dscout |>
+  filter(simulate_setting == 'Unbalanced Nonoverlap') |>
+  filter(data_split == 'rand_split_by_col') |>
+  filter(stability_selection.threshold == 0.8) |>
+  filter(score %in% c('cov_L2_fit','prop_true_high_cos_sim')) |>
+  filter(score.sim_threshold == 0.9 | is.na(score.sim_threshold) == TRUE) |>
+  tidyr::unnest(score.result) |>
+  select(init, analyze, prior, score, score.result)
+```
+
+```{r}
+dscout_unbal_nonoverlap_sensitivity <- dscout_unbal_nonoverlap_results |>
+  filter(score == 'prop_true_high_cos_sim')
+```
+
+```{r}
+p1 <- ggplot(data = dscout_unbal_nonoverlap_sensitivity, aes(x = analyze, y = score.result, color = prior))  +
+  facet_wrap(vars(init), scales = "fixed") +
+  geom_boxplot() + theme(
+    # Rotate labels 45 degrees
+    axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1),
+    legend.position = 'bottom'
+  ) + labs(title = "Sensitivity for Unbalanced Nonoverlapping",
+       x = "Method",
+       y = "Sensitivity (Threshold of 0.90)") +
+  ylim(0,1)
+
+p1
+```
+
+```{r}
+dscout_unbal_nonoverlap_recon_error <- dscout_unbal_nonoverlap_results |>
+  filter(score == 'cov_L2_fit')
+```
+
+```{r}
+p2 <- ggplot(data = dscout_unbal_nonoverlap_recon_error, aes(x = analyze, y = score.result, color = prior))  +
+  facet_wrap(vars(init), scales = "fixed") +
+  geom_boxplot() + theme(
+    # Rotate labels 45 degrees
+    axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1),
+    legend.position = 'bottom'
+  ) + labs(title = "Reconstruction Error for Unbalanced Nonoverlapping",
+       x = "Method",
+       y = "Reconstruction Error")
+
+p2
+```
+
+# Balanced Nonoverlapping
+
+```{r}
+dscout_bal_nonoverlap_results <- dscout |>
+  filter(simulate_setting == 'Balanced Nonoverlap') |>
+  filter(data_split == 'rand_split_by_col') |>
+  filter(stability_selection.threshold == 0.8) |>
+  filter(score %in% c('cov_L2_fit','prop_true_high_cos_sim')) |>
+  filter(score.sim_threshold == 0.9 | is.na(score.sim_threshold) == TRUE) |>
+  tidyr::unnest(score.result) |>
+  select(init, analyze, prior, score, score.result)
+```
+
+```{r}
+dscout_bal_nonoverlap_sensitivity <- dscout_bal_nonoverlap_results |>
+  filter(score == 'prop_true_high_cos_sim')
+```
+
+```{r}
+p1 <- ggplot(data = dscout_bal_nonoverlap_sensitivity, aes(x = analyze, y = score.result, color = prior))  +
+  facet_wrap(vars(init), scales = "fixed") +
+  geom_boxplot() + theme(
+    # Rotate labels 45 degrees
+    axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1),
+    legend.position = 'bottom'
+  ) + labs(title = "Sensitivity for Balanced Nonoverlapping",
+       x = "Method",
+       y = "Sensitivity (Threshold of 0.90)") +
+  ylim(0,1)
+
+p1
+```
+
+```{r}
+dscout_bal_nonoverlap_recon_error <- dscout_bal_nonoverlap_results |>
+  filter(score == 'cov_L2_fit')
+```
+
+```{r}
+p2 <- ggplot(data = dscout_bal_nonoverlap_recon_error, aes(x = analyze, y = score.result, color = prior))  +
+  facet_wrap(vars(init), scales = "fixed") +
+  geom_boxplot() + theme(
+    # Rotate labels 45 degrees
+    axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1),
+    legend.position = 'bottom'
+  ) + labs(title = "Reconstruction Error for Balanced Nonoverlapping",
+       x = "Method",
+       y = "Reconstruction Error")
+
+p2
+```
+
+# Sparse Overlap - 0.1
+
+```{r}
+dscout_sparse_overlap_0.1_results <- dscout |>
+  filter(simulate_setting == 'Sparse Overlap - 0.1') |>
+  filter(data_split == 'rand_split_by_col') |>
+  filter(stability_selection.threshold == 0.8) |>
+  filter(score %in% c('cov_L2_fit','prop_true_high_cos_sim')) |>
+  filter(score.sim_threshold == 0.9 | is.na(score.sim_threshold) == TRUE) |>
+  tidyr::unnest(score.result) |>
+  select(init, analyze, prior, score, score.result)
+```
+
+```{r}
+dscout_sparse_overlap_0.1_sensitivity <- dscout_sparse_overlap_0.1_results |>
+  filter(score == 'prop_true_high_cos_sim')
+```
+
+```{r}
+p1 <- ggplot(data = dscout_sparse_overlap_0.1_sensitivity, aes(x = analyze, y = score.result, color = prior))  +
+  facet_wrap(vars(init), scales = "fixed") +
+  geom_boxplot() + theme(
+    # Rotate labels 45 degrees
+    axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1),
+    legend.position = 'bottom'
+  ) + labs(title = "Sensitivity for Sparse Overlap - 0.1",
+       x = "Method",
+       y = "Sensitivity (Threshold of 0.90)") +
+  ylim(0,1)
+
+p1
+```
+
+```{r}
+dscout_sparse_overlap_0.1_recon_error <- dscout_sparse_overlap_0.1_results |>
+  filter(score == 'cov_L2_fit')
+```
+
+```{r}
+p2 <- ggplot(data = dscout_sparse_overlap_0.1_recon_error, aes(x = analyze, y = score.result, color = prior))  +
+  facet_wrap(vars(init), scales = "fixed") +
+  geom_boxplot() + theme(
+    # Rotate labels 45 degrees
+    axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1),
+    legend.position = 'bottom'
+  ) + labs(title = "Reconstruction Error for Sparse Overlap - 0.1",
+       x = "Method",
+       y = "Reconstruction Error")
+
+p2
+```
+
+# Sparse Overlap - 0.3
+
+```{r}
+dscout_sparse_overlap_0.3_results <- dscout |>
+  filter(simulate_setting == 'Sparse Overlap - 0.3') |>
+  filter(data_split == 'rand_split_by_col') |>
+  filter(stability_selection.threshold == 0.8) |>
+  filter(score %in% c('cov_L2_fit','prop_true_high_cos_sim')) |>
+  filter(score.sim_threshold == 0.9 | is.na(score.sim_threshold) == TRUE) |>
+  tidyr::unnest(score.result) |>
+  select(init, analyze, prior, score, score.result)
+```
+
+```{r}
+dscout_sparse_overlap_0.3_sensitivity <- dscout_sparse_overlap_0.3_results |>
+  filter(score == 'prop_true_high_cos_sim')
+```
+
+```{r}
+p1 <- ggplot(data = dscout_sparse_overlap_0.3_sensitivity, aes(x = analyze, y = score.result, color = prior))  +
+  facet_wrap(vars(init), scales = "fixed") +
+  geom_boxplot() + theme(
+    # Rotate labels 45 degrees
+    axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1),
+    legend.position = 'bottom'
+  ) + labs(title = "Sensitivity for Sparse Overlap - 0.3",
+       x = "Method",
+       y = "Sensitivity (Threshold of 0.90)") +
+  ylim(0,1)
+
+p1
+```
+
+```{r}
+dscout_sparse_overlap_0.3_recon_error <- dscout_sparse_overlap_0.3_results |>
+  filter(score == 'cov_L2_fit')
+```
+
+```{r}
+p2 <- ggplot(data = dscout_sparse_overlap_0.3_recon_error, aes(x = analyze, y = score.result, color = prior))  +
+  facet_wrap(vars(init), scales = "fixed") +
+  geom_boxplot() + theme(
+    # Rotate labels 45 degrees
+    axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1),
+    legend.position = 'bottom'
+  ) + labs(title = "Reconstruction Error for Sparse Overlap - 0.3",
+       x = "Method",
+       y = "Reconstruction Error")
+
+p2
+```
+
+# Balanced Tree with Balanced Groups
+
+```{r}
+dscout_baltree_bal_groups_results <- dscout |>
+  filter(simulate_setting == 'Balanced Tree - Balanced Groups') |>
+  filter(data_split == 'rand_split_by_col') |>
+  filter(stability_selection.threshold == 0.8) |>
+  filter(score %in% c('cov_L2_fit','prop_true_high_cos_sim')) |>
+  filter(score.sim_threshold == 0.90 | is.na(score.sim_threshold) == TRUE) |>
+  tidyr::unnest(score.result) |>
+  select(init, analyze, prior, score, score.result)
+```
+
+```{r}
+dscout_baltree_bal_groups_sensitivity <- dscout_baltree_bal_groups_results |>
+  filter(score == 'prop_true_high_cos_sim')
+```
+
+```{r}
+p1 <- ggplot(data = dscout_baltree_bal_groups_sensitivity, aes(x = analyze, y = score.result, color = prior))  +
+  facet_wrap(vars(init), scales = "fixed") +
+  geom_boxplot() + theme(
+    # Rotate labels 45 degrees
+    axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1),
+    legend.position = 'bottom'
+  ) + labs(title = "Sensitivity for Balanced Tree with Balanced Groups",
+       x = "Method",
+       y = "Sensitivity (Threshold of 0.90)") +
+  ylim(0,1)
+
+p1
+```
+
+```{r}
+dscout_baltree_bal_groups_recon_error <- dscout_baltree_bal_groups_results |>
+  filter(score == 'cov_L2_fit')
+```
+
+```{r}
+p2 <- ggplot(data = dscout_baltree_bal_groups_recon_error, aes(x = analyze, y = score.result, color = prior))  +
+  facet_wrap(vars(init), scales = "fixed") +
+  geom_boxplot() + theme(
+    # Rotate labels 45 degrees
+    axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1),
+    legend.position = 'bottom'
+  ) + labs(title = "Reconstruction Error for Balanced Tree with Balanced Groups",
+       x = "Method",
+       y = "Reconstruction Error")
+
+p2
+```
+
+# Balanced Tree with Unbalanced Groups
+
+```{r}
+dscout_baltree_unbal_groups_results <- dscout |>
+  filter(simulate_setting == 'Balanced Tree - Unbalanced Groups') |>
+  filter(data_split == 'rand_split_by_col') |>
+  filter(stability_selection.threshold == 0.8) |>
+  filter(score %in% c('cov_L2_fit','prop_true_high_cos_sim')) |>
+  filter(score.sim_threshold == 0.90 | is.na(score.sim_threshold) == TRUE) |>
+  tidyr::unnest(score.result) |>
+  select(init, analyze, prior, score, score.result)
+```
+
+```{r}
+dscout_baltree_unbal_groups_sensitivity <- dscout_baltree_unbal_groups_results |>
+  filter(score == 'prop_true_high_cos_sim')
+```
+
+```{r}
+p1 <- ggplot(data = dscout_baltree_unbal_groups_sensitivity, aes(x = analyze, y = score.result, color = prior))  +
+  facet_wrap(vars(init), scales = "fixed") +
+  geom_boxplot() + theme(
+    # Rotate labels 45 degrees
+    axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1),
+    legend.position = 'bottom'
+  ) + labs(title = "Sensitivity for Balanced Tree with Unbalanced Groups",
+       x = "Method",
+       y = "Sensitivity (Threshold of 0.90)") +
+  ylim(0,1)
+
+p1
+```
+
+```{r}
+dscout_baltree_unbal_groups_recon_error <- dscout_baltree_unbal_groups_results |>
+  filter(score == 'cov_L2_fit')
+```
+
+```{r}
+p2 <- ggplot(data = dscout_baltree_unbal_groups_recon_error, aes(x = analyze, y = score.result, color = prior))  +
+  facet_wrap(vars(init), scales = "fixed") +
+  geom_boxplot() + theme(
+    # Rotate labels 45 degrees
+    axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1),
+    legend.position = 'bottom'
+  ) + labs(title = "Reconstruction Error for Balanced Tree with Unbalanced Groups",
+       x = "Method",
+       y = "Reconstruction Error")
+
+p2
+```
+
+# Unbalanced Tree
+
+```{r}
+dscout_unbaltree_results <- dscout |>
+  filter(simulate_setting == 'Unbalanced Tree') |>
+  filter(data_split == 'rand_split_by_col') |>
+  filter(stability_selection.threshold == 0.8) |>
+  filter(score %in% c('cov_L2_fit','prop_true_high_cos_sim')) |>
+  filter(score.sim_threshold == 0.90 | is.na(score.sim_threshold) == TRUE) |>
+  tidyr::unnest(score.result) |>
+  select(init, analyze, prior, score, score.result)
+```
+
+```{r}
+dscout_unbaltree_sensitivity <- dscout_unbaltree_results |>
+  filter(score == 'prop_true_high_cos_sim')
+```
+
+```{r}
+p1 <- ggplot(data = dscout_unbaltree_sensitivity, aes(x = analyze, y = score.result, color = prior))  +
+  facet_wrap(vars(init), scales = "fixed") +
+  geom_boxplot() + theme(
+    # Rotate labels 45 degrees
+    axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1),
+    legend.position = 'bottom'
+  ) + labs(title = "Sensitivity for Unbalanced Tree",
+       x = "Method",
+       y = "Sensitivity (Threshold of 0.90)") +
+  ylim(0,1)
+
+p1
+```
+
+```{r}
+dscout_unbaltree_recon_error <- dscout_unbaltree_results |>
+  filter(score == 'cov_L2_fit')
+```
+
+```{r}
+p2 <- ggplot(data = dscout_unbaltree_recon_error, aes(x = analyze, y = score.result, color = prior))  +
+  facet_wrap(vars(init), scales = "fixed") +
+  geom_boxplot() + theme(
+    # Rotate labels 45 degrees
+    axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1),
+    legend.position = 'bottom'
+  ) + labs(title = "Reconstruction Error for Unbalanced Tree",
+       x = "Method",
+       y = "Reconstruction Error")
+
+p2
+```
